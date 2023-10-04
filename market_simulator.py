@@ -7,7 +7,7 @@ import subprocess
 import argparse
 from strenum import StrEnum
 from enum import Enum, auto
-from utils import data_utils as du
+from local_utils import data_utils as du
 
 
 mktSpec = {}
@@ -500,7 +500,7 @@ def test_scheduler(args):
     if mkt_type not in mkt_types:
         raise ValueError(f'Input mkt_type {mkt_type} is not a valid choice. Enter one of: "TS", "MS", or "RHF".')
     scheduler = MarketScheduler(mkt_type, start=now, end=then, language=language, 
-                                alg_name=alg_name,)
+                                alg_name=alg_name)
     scheduler.simulate()
   
 if __name__ == '__main__':
