@@ -7,7 +7,6 @@ import subprocess
 import argparse
 from strenum import StrEnum
 from enum import Enum, auto
-from local_utils import data_utils as du
 
 
 mktSpec = {}
@@ -108,6 +107,69 @@ class Timeline(StrEnum):
     horizon_end = "HE"
     market_clearing = "MC"
     start_period = "SP"
+
+def validate(offer, time_step, rlist, times):
+    offer_keys = ['cost_rgu', 'cost_rgd', 'cost_spr', 'cost_nsp', 'block_ch_mc', 'block_dc_mc', 
+                  'block_soc_mc', 'block_ch_mq', 'block_dc_mq', 'block_soc_mq', 'soc_end', 
+                  'bid_soc', 'init_en', 'init_status', 'ramp_up', 'ramp_dn', 'socmax', 'socmin',
+                  'soc_begin', 'eff_ch', 'eff_dc', 'chmax', 'dcmax']
+    use_time = [True, True, True, True, True, True, True, True, True, True, False, False, False,
+                False, False, False, False, False, False, False, False, True, True]
+    block_types = [list, str, float, int]
+    reg_types = [str, float, int]
+    found_errors = False
+    for rid in rlist:
+        if rid not in offer.keys():
+            print(f'KEY ERROR: Offer is missing top level key for resource id: {rid}')
+            found_errors = True
+        for i, key in enumerate(offer_keys):
+            if key not in offer[rid].keys():
+                print(f'KEY ERROR: Offer is missing required offer key: {key}')
+                found_errors = True
+            else:
+                if use_time[i]:
+                    in_times = [t for t in offer[rid][key].keys()]
+                    for time in in_times:
+                        if time not in times:
+                            print(f"VALUE ERROR: Found unexpected time {time} in offer {key}. " + \
+                                  f"Expected the following times\n{times}")
+                            found_errors = True
+                if 'block' in key:
+                    cnt = 0
+                    for time, val in offer[rid][key].items():
+                        if type(val) not in block_types and cnt == 0:
+                            print(f"TYPE ERROR: Unexpected value type ({type(val)}) in " + \
+                                  f"block offer {key}")
+                            found_errors = True
+                        cnt += 1
+                elif key == 'bid_soc':
+                    val = offer[rid][key]
+                    if type(val) == bool or type(val) == int:
+                        pass
+                    else:
+                        print(f"TYPE ERROR: bid_soc keyword must be boolean (not {type(val)})")
+                        found_errors = True
+                elif use_time[i]:
+                    cnt = 0
+                    for time, val in offer[rid][key].items():
+                        if type(val) not in reg_types and cnt == 0:
+                            print(f"TYPE ERROR: Unexpected value type ({type(val)}) in offer {key}")
+                            found_errors = True
+                        cnt += 1
+                else:
+                    val = offer[rid][key]
+                    if type(val) not in reg_types:
+                        print(f"TYPE ERROR: Unexpected value type ({type(val)}) in offer {key}")
+                        found_errors = True
+        for key in offer[rid].keys():
+            if key not in offer_keys:
+                print(f"Warning: Extra key '{key}' found in submitted offer. This key will be "+\
+                      "ignored.")
+    if not found_errors:            
+        print(f"Good news! Offer format appears valid for market clearing time step {time_step}")
+    else:
+        print("\nThe above errors were found in the formatted offer. Please address and retry.\n")
+        exit(0)
 
 class TimeKeeper:
     '''
@@ -374,7 +436,7 @@ class MarketScheduler:
 
     '''
     def __init__(self, mkttype:MarketType, start:datetime, end:datetime, language='python',
-                 alg_name='MyPython1.py', pid='p00001'):
+                 alg_name='market_participant.py', pid='p00001'):
         self.type = mkttype
         self.language = language
         self.alg_name = alg_name
@@ -391,15 +453,16 @@ class MarketScheduler:
         queue = self.queue
         
         # Load participant and resource information
-        participant_res = du.load_participant_info()
-        resources_df = du.load_resource_info()
-        # Save mkt_config file for competitors
-        with open('offer_data/market_specification.json', "w") as fout:
-            json.dump(mktSpec, fout, indent=4)
+        # participant_res = {'p00001':['T000001']} #du.load_participant_info()
+        # resources_df = du.load_resource_info()
+        # Save mkt_config file for participants
+        # with open('offer_data/market_specification.json', "w") as fout:
+        #     json.dump(mktSpec, fout, indent=4)
         # Tracker for the previous physical results and dispatch uid
-        self.prev_mkt_uid = None 
-        self.prev_disp_uid = None 
-        self.dense_time = None # For settlements at five-minute increments
+        # self.prev_mkt_uid = None 
+        # self.prev_disp_uid = None 
+        # self.dense_time = None # For settlements at five-minute increments
+        time_step = 1
         while time.get_status() is not time.status.COMPLETE:
             current_time = time[Timeline.current_time]
             cleared_mkts = []
@@ -407,58 +470,84 @@ class MarketScheduler:
             # Perform market clearing for market types (e.g. DAM, RTM)
             for mkt_key, mkt_config in queue.on_deck(current_time):
                 # create data files
-                uid = mkt_config.to_json(t_dense=self.dense_time)
-                # Update system offers, send status to competitors, then collect all offers
-                du.update_competitor_status(resources_df, participant_res, uid)
+                # uid = mkt_config.to_json(t_dense=self.dense_time)
+                # Update system offers, send status to participants, then collect all offers
+                # du.update_participant_status(resources_df, participant_res, uid)
                 # clear market
-                self.run_competitor_algorithms(uid, self.pid, self.language, self.alg_name)
-                self.validate_offers(uid, self.pid)
-                self.send_history(uid)
+                print(f"Calling Participant Algorithm ({self.alg_name}) in language " + \
+                      f"{self.language} for time step {time_step}\n")
+                rlist, times = self.run_participant_algorithms(self.pid, self.language, self.alg_name,
+                                                        time_step)
+                self.validate_offers(self.pid, rlist, time_step, times)
+                # self.send_history(uid)
                 cleared_mkts.append(mkt_key)
+                time_step += 1
             # prepare for next time interval
             time.increment_time()
+            
             queue.update(time.copy(), keys=cleared_mkts)
         self.logger.info("Simulation completed.")
 
-    def run_competitor_algorithms(self, uid, pid, language, alg_name):
-        '''Calls competitor offer algorithms to run and waits until they are finished'''
+    def run_participant_algorithms(self, pid, language, alg_name, time_step):
+        '''Calls participant offer algorithms to run and waits until they are finished'''
         pdir = f'offer_data/participant_{pid}'
+        if time_step == 1:
+            idx = 0
+        elif time_step == 2:
+            idx = 1
+        else:
+            idx = 2
+        with open(f'system_data/market{idx}.json', 'r') as f:
+            market_dict = json.load(f)
+            market_json = json.dumps(market_dict)
+        with open(f'system_data/resources{idx}.json', 'r') as f:
+            resource_dict = json.load(f)
+            resource_json = json.dumps(resource_dict)
         if not os.path.exists(pdir):
             os.makedirs(pdir)
         if language.lower() == 'python':
-            algorithm = subprocess.run(['python','MyPython1.py'], capture_output=True, text=True,
+            try:
+                algorithm = subprocess.run(['python',f'{self.alg_name}', f'{time_step}', f'{market_json}',
+                                        f'{resource_json}'], capture_output=True, text=True,
                                        check=True, cwd=os.path.join(os.getcwd(),pdir))
+                self.logger.debug(algorithm.stdout)
+                self.logger.debug(algorithm.stderr)
+            except subprocess.CalledProcessError as e:
+                print(e.output)
+                print(e.stderr)
+                exit(0)
         else:
             raise ValueError(f"No launcher built yet for coding language {language}.")
-        self.logger.debug(algorithm.stdout)
-        self.logger.debug(algorithm.stderr)
+        
+        rlist = [r for r in resource_dict['status'].keys()]
+        times = [t for t in market_dict['intervals']]
+        return rlist, times
             
-    def validate_offers(self, uid, pid):
+    def validate_offers(self, pid, rlist, time_step, times):
         '''
         Checks the submitted offer and returns a message if any formatting errors are found.
         '''
         # Walk through the participant and system directories and subdirectories
-        part_directories = [entry for entry in glob.glob('offer_data/participant_p*/*') if os.path.isdir(entry)]
+        part_directories = [entry for entry in glob.glob('offer_data/participant_p*') if os.path.isdir(entry)]
         for offer_dir in part_directories:
-            files = glob.glob(os.path.join(offer_dir,'*'))
-            for filename in files:
-                # Check if the file name matches the pattern f"{uid}.json"
-                if os.path.split(filename)[-1] == f"{uid}.json":
-                    # Open the JSON file and load its contents
-                    with open(filename, 'r') as file:
-                        offer_data = json.load(file)
-                        du.validate(offer_data, uid)
+            files = glob.glob(os.path.join(offer_dir,f'offer_{time_step}.json'))
+            if len(files) == 0:
+                raise FileNotFoundError(f"File 'offer_{time_step}.json' not found in {offer_dir}")
+            # Open the JSON file and load its contents
+            with open(files[0], 'r') as file:
+                offer_data = json.load(file)
+                validate(offer_data, time_step, rlist, times)
                         
-    def send_history(self, uid):
-        '''Sends a formatted history.json file to the offer_data directory'''
-        hist_keys = ['actual', 'delta', 'fwd_en', 'fwd_nsp', 'fwd_rgd', 'fwd_rgu', 'fwd_spr', 'lmp',
-                       'mcp', 'schedule', 'settlement']
-        hist_dict = {}
-        for key in hist_keys:
-            hist_dict[key] = f'{key}_placeholder'
-        hist_file = './offer_data/history.json'
-        with open(hist_file, "w") as f:
-            json.dump(hist_dict, f, indent=4)
+    # def send_history(self, uid):
+    #     '''Sends a formatted history.json file to the offer_data directory'''
+    #     hist_keys = ['actual', 'delta', 'fwd_en', 'fwd_nsp', 'fwd_rgd', 'fwd_rgu', 'fwd_spr', 'lmp',
+    #                    'mcp', 'schedule', 'settlement']
+    #     hist_dict = {}
+    #     for key in hist_keys:
+    #         hist_dict[key] = f'{key}_placeholder'
+    #     hist_file = './offer_data/history.json'
+    #     with open(hist_file, "w") as f:
+    #         json.dump(hist_dict, f, indent=4)
 
 def setup_logger(log_level=logging.INFO):
     logger = logging.getLogger()
@@ -507,16 +596,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--mkt_type', type=str, default='TS',
                         help="Market types, can choose TS (Two-Settlement), MS (Multi-Settlement), or RHF (Rolling Horizon Forward).", choices=['TS', 'MS', 'RHF'])
-    parser.add_argument('-d', '--duration', type=int, default=5,
+    parser.add_argument('-d', '--duration', type=int, default=10,
                         help="Choose the integer duration (units of duration are set in duration_units).")
     parser.add_argument('-u', '--duration_units', type=str, default='minutes',
                         help="Set the units of the duration. May be 'minutes', 'hours', or 'days'. (Minumum of 5 minutes, maximum of 30 days).", choices=['days', 'hours', 'minutes'])
     parser.add_argument('-s', '--start_date', type=str, default='201801272355',
                         help="Date/Time to start simulation. Format is YYYYmmddHHMM. Must be within the time stamp of the supplied forecast.")
     parser.add_argument('-l', '--language', type=str, default='python',
-                        help="Code language desired for competitor algorithm.")
-    parser.add_argument('-a', '--algorithm_name', type=str, default='MyPython1.py',
-                        help="The name of the competitor algorithm to run.")
+                        help="Code language desired for participant algorithm.")
+    parser.add_argument('-a', '--algorithm_name', type=str, default='market_participant.py',
+                        help="The name of the participant algorithm to run.")
     args = parser.parse_args()
     setup_logger(log_level=logging.INFO)
     test_scheduler(args)
