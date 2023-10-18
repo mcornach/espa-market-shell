@@ -108,7 +108,50 @@ class Timeline(StrEnum):
     market_clearing = "MC"
     start_period = "SP"
 
+def validate_virtual(offer, time_step, rlist, times, found_errors):
+    ''' Checks for any virtual offers and validates their format. '''
+    virtual_keys = ['block_dec_mq', 'block_inc_mq', 'block_v_mv', 'block_v_mc']
+    block_types = [list, str, float, int]
+    for vkey in offer.keys():
+        if vkey in rlist:
+            continue
+        try:
+            vid, bus = vkey.split('_')
+        except ValueError:
+            print(f"ERROR: Invalid virtual offer key {vkey}. Does not match format [pid]_[bus]")
+            found_errors = True
+            continue
+        for i, key in enumerate(virtual_keys):
+            if key not in offer[vkey].keys():
+                print(f'KEY ERROR: Virtual offer is missing required offer key: {key}')
+                found_errors = True
+            else:
+                in_times = [t for t in offer[vkey][key].keys()]
+                for time in in_times:
+                    if time not in times:
+                        print(f"VALUE ERROR: Found unexpected time {time} in virtual offer " + \
+                              f" {key}. Expected the following times\n{times}")
+                        found_errors = True
+                for sys_t in times:
+                    if sys_t not in in_times:
+                        print(f"Warning: Missing offer at expected time {sys_t} in virtual " + \
+                              f"offer {key}. This time step will not be bid into the market.")
+                        found_errors = True
+                cnt = 0
+                for time, val in offer[vkey][key].items():
+                    if type(val) not in block_types and cnt == 0:
+                        print(f"TYPE ERROR: Unexpected value type ({type(val)}) in " + \
+                              f"virtual block offer {key}")
+                        found_errors = True
+                    cnt += 1
+        for key in offer[vkey].keys():
+            if key not in virtual_keys:
+                print(f"Warning: Extra key '{key}' found in virtual offer. This key will be " + \
+                      "ignored.")
+    return found_errors
+
 def validate(offer, time_step, rlist, times):
+    ''' Checks keys and timesteps/values for a storage offer. '''
     offer_keys = ['cost_rgu', 'cost_rgd', 'cost_spr', 'cost_nsp', 'block_ch_mc', 'block_dc_mc', 
                   'block_soc_mc', 'block_ch_mq', 'block_dc_mq', 'block_soc_mq', 'soc_end', 
                   'bid_soc', 'init_en', 'init_status', 'ramp_up', 'ramp_dn', 'socmax', 'socmin',
@@ -133,6 +176,11 @@ def validate(offer, time_step, rlist, times):
                         if time not in times:
                             print(f"VALUE ERROR: Found unexpected time {time} in offer {key}. " + \
                                   f"Expected the following times\n{times}")
+                            found_errors = True
+                    for sys_t in times:
+                        if sys_t not in in_times:
+                            print(f"Warning: Missing offer at expected time {sys_t} in offer " + \
+                                  f"{key}. This time step will not be bid into the market.")
                             found_errors = True
                 if 'block' in key:
                     cnt = 0
@@ -165,6 +213,9 @@ def validate(offer, time_step, rlist, times):
             if key not in offer_keys:
                 print(f"Warning: Extra key '{key}' found in submitted offer. This key will be "+\
                       "ignored.")
+    return found_errors
+        
+def print_message(found_errors, time_step):
     if not found_errors:            
         print(f"Good news! Offer format appears valid for market clearing time step {time_step}")
     else:
@@ -536,7 +587,9 @@ class MarketScheduler:
             # Open the JSON file and load its contents
             with open(files[0], 'r') as file:
                 offer_data = json.load(file)
-                validate(offer_data, time_step, rlist, times)
+                errs = validate(offer_data, time_step, rlist, times)
+                errs = validate_virtual(offer_data, time_step, rlist, times, errs)
+                print_message(errs, time_step)
                         
     # def send_history(self, uid):
     #     '''Sends a formatted history.json file to the offer_data directory'''
