@@ -8,7 +8,6 @@ import argparse
 from strenum import StrEnum
 from enum import Enum, auto
 
-
 mktSpec = {}
 mktSpec['TS'] = {
     "TSDAM": {
@@ -561,6 +560,8 @@ class MarketScheduler:
                 algorithm = subprocess.run(['python',f'{self.alg_name}', f'{time_step}', f'{market_json}',
                                         f'{resource_json}'], capture_output=True, text=True,
                                        check=True, cwd=os.path.join(os.getcwd(),pdir))
+                print(algorithm.stdout)
+                print(algorithm.stderr)
                 self.logger.debug(algorithm.stdout)
                 self.logger.debug(algorithm.stderr)
             except subprocess.CalledProcessError as e:
